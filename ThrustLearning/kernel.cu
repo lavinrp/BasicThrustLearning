@@ -2,120 +2,133 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
+#include <thrust\device_vector.h>
+#include <thrust\host_vector.h>
+#include <thrust\device_ptr.h>
+#include <thrust\memory.h>
+#include <thrust\copy.h>
+
 #include <stdio.h>
 
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
+#include <iostream>
 
-__global__ void addKernel(int *c, const int *a, const int *b)
+
+
+struct isEven {
+
+	__device__ __host__
+	bool operator()(int x) 
+	{
+		return (x % 2) == 0;
+	}
+
+};
+
+__device__
+int getGlobalIdx_3D_3D() 
 {
-    int i = threadIdx.x;
-    c[i] = a[i] + b[i];
+	int blockId = blockIdx.x + blockIdx.y * gridDim.x
+		+ gridDim.x * gridDim.y * blockIdx.z;
+	int threadId = blockId * (blockDim.x * blockDim.y * blockDim.z)
+		+ (threadIdx.z * (blockDim.x * blockDim.y))
+		+ (threadIdx.y * blockDim.x) + threadIdx.x;
+	return threadId;
+}
+
+__global__
+void addOne( int const * const __restrict__ inputData, int* __restrict__ outputData, size_t dataSize) 
+{
+	int thid = getGlobalIdx_3D_3D();
+	if (thid >= dataSize) 
+	{
+		return;
+	}
+
+	outputData[thid] = inputData[thid] + 1;
+}
+
+void addOneExample(const int DATA_SIZE) 
+{
+	thrust::host_vector<int> h_inputData(DATA_SIZE);
+	std::cout << "input data:" << std::endl;
+	for (size_t i = 0; i < DATA_SIZE; i++) {
+		h_inputData[i] = i;
+		std::cout << i << std::endl;
+	}
+	std::cout << std::endl << std::endl;
+
+	//move data to device
+	thrust::device_vector<int> d_inputData = h_inputData;
+
+	//allocate output data array
+	thrust::device_vector<int> d_outputData(DATA_SIZE);
+
+	addOne <<<2, 5>>>(thrust::raw_pointer_cast(d_inputData.data()), thrust::raw_pointer_cast(d_outputData.data()), DATA_SIZE);
+
+	//move data back to host
+	thrust::host_vector<int> h_outputData = d_outputData;
+
+	std::cout << "output data: " << std::endl;
+	for (size_t i = 0; i < h_outputData.size(); i++) {
+		std::cout << h_outputData[i] << std::endl;
+	}
+
+	std::cout << std::endl << std::endl;
+}
+
+void filterExample(const int DATA_SIZE) 
+{
+	thrust::host_vector<int> h_inputData(DATA_SIZE);
+	std::cout << "input data:" << std::endl;
+	for (size_t i = 0; i < DATA_SIZE; i++) {
+		h_inputData[i] = i;
+		std::cout << i << std::endl;
+	}
+	std::cout << std::endl << std::endl;
+
+	//move data to device
+	thrust::device_vector<int> d_inputData = h_inputData;
+
+	//allocate output data array
+	thrust::device_vector<int> d_outputData(DATA_SIZE);
+
+	auto lastCopiedValue = thrust::copy_if(d_inputData.begin(), d_inputData.end(), d_outputData.begin(), isEven());
+
+	//move data back to host
+	thrust::host_vector<int> h_outputData = d_outputData;
+
+	std::cout << "output data: " << std::endl;
+	for (int i = 0; i < std::distance(d_outputData.begin(), lastCopiedValue); i++) 
+	{
+		std::cout << h_outputData[i] << std::endl;
+	}
+
+	std::cout << std::endl << std::endl;
+
 }
 
 int main()
 {
-    const int arraySize = 5;
-    const int a[arraySize] = { 1, 2, 3, 4, 5 };
-    const int b[arraySize] = { 10, 20, 30, 40, 50 };
-    int c[arraySize] = { 0 };
 
-    // Add vectors in parallel.
-    cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addWithCuda failed!");
-        return 1;
-    }
+	//add one to data
 
-    printf("{1,2,3,4,5} + {10,20,30,40,50} = {%d,%d,%d,%d,%d}\n",
-        c[0], c[1], c[2], c[3], c[4]);
+	//create input data
+	const int DATA_SIZE = 5;
+	
+	std::cout << "starting addOne" << std::endl;
+	addOneExample(DATA_SIZE);
 
-    // cudaDeviceReset must be called before exiting in order for profiling and
-    // tracing tools such as Nsight and Visual Profiler to show complete traces.
-    cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
-    }
+	std::cout << "press ENTER to continue...";
+	std::cin.get();
 
-    return 0;
+	std::cout << "starting filter" << std::endl;
+	filterExample(DATA_SIZE);
+
+	std::cout << "press ENTER to exit...";
+	std::cin.get();
+
+	//filter data based on even odd
+
+
 }
 
-// Helper function for using CUDA to add vectors in parallel.
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size)
-{
-    int *dev_a = 0;
-    int *dev_b = 0;
-    int *dev_c = 0;
-    cudaError_t cudaStatus;
-
-    // Choose which GPU to run on, change this on a multi-GPU system.
-    cudaStatus = cudaSetDevice(0);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-        goto Error;
-    }
-
-    // Allocate GPU buffers for three vectors (two input, one output)    .
-    cudaStatus = cudaMalloc((void**)&dev_c, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_a, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_b, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_a, a, size * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMemcpy(dev_b, b, size * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-    // Launch a kernel on the GPU with one thread for each element.
-    addKernel<<<1, size>>>(dev_c, dev_a, dev_b);
-
-    // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-        goto Error;
-    }
-    
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
-        goto Error;
-    }
-
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(c, dev_c, size * sizeof(int), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-Error:
-    cudaFree(dev_c);
-    cudaFree(dev_a);
-    cudaFree(dev_b);
-    
-    return cudaStatus;
-}
